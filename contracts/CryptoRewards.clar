@@ -149,3 +149,188 @@
     )
   )
 )
+
+
+(define-data-var points-expiry-blocks uint u10000)
+
+(define-map point-expiry-data principal 
+  {
+    points: uint,
+    expiry-block: uint
+  }
+)
+
+(define-public (set-points-expiry (blocks uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (var-set points-expiry-blocks blocks)
+    (ok true)
+  )
+)
+
+(define-public (expire-points (customer principal))
+  (let (
+    (expiry-data (default-to {points: u0, expiry-block: u0} 
+                  (map-get? point-expiry-data customer)))
+    (current-block stacks-block-height)
+  )
+    (if (>= current-block (get expiry-block expiry-data))
+      (begin
+        (map-delete point-expiry-data customer)
+        (map-set customer-points customer u0)
+        (ok true)
+      )
+      (ok false)
+    )
+  )
+)
+
+
+(define-map membership-tiers principal 
+  {
+    tier: (string-ascii 20),
+    multiplier: uint,
+    min-points: uint
+  }
+)
+
+(define-public (create-tier (tier-name (string-ascii 20)) (tier-multiplier uint) (minimum-points uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (map-set membership-tiers tx-sender
+      {
+        tier: tier-name,
+        multiplier: tier-multiplier,
+        min-points: minimum-points
+      }
+    )
+    (ok true)
+  )
+)
+
+(define-read-only (get-tier-by-points (points uint))
+  (match (map-get? membership-tiers tx-sender)
+    tier-data (if (>= points (get min-points tier-data))
+      (some tier-data)
+      none
+    )
+    none
+  )
+)
+
+(define-read-only (get-customer-tier (customer principal))
+  (let (
+    (points (get-point-balance customer))
+  )
+    (get-tier-by-points points)
+  )
+)
+
+
+
+(define-constant ERR-SELF-TRANSFER (err u105))
+
+(define-public (transfer-points (recipient principal) (amount uint))
+  (let (
+    (sender-balance (default-to u0 (map-get? customer-points tx-sender)))
+  )
+    (asserts! (not (is-eq tx-sender recipient)) ERR-SELF-TRANSFER)
+    (asserts! (>= sender-balance amount) ERR-INSUFFICIENT-POINTS)
+    
+    (map-set customer-points tx-sender (- sender-balance amount))
+    (map-set customer-points recipient 
+      (+ (default-to u0 (map-get? customer-points recipient)) amount)
+    )
+    (ok true)
+  )
+)
+
+(define-map promotions uint 
+  {
+    name: (string-ascii 50),
+    bonus-multiplier: uint,
+    start-block: uint,
+    end-block: uint,
+    is-active: bool
+  }
+)
+
+(define-data-var promotion-counter uint u0)
+
+(define-public (create-promotion (promo-name (string-ascii 50)) (multiplier uint) (duration uint))
+  (let (
+    (promo-id (var-get promotion-counter))
+  )
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (map-set promotions promo-id
+      {
+        name: promo-name,
+        bonus-multiplier: multiplier,
+        start-block: stacks-block-height,
+        end-block: (+ stacks-block-height duration),
+        is-active: true
+      }
+    )
+    (var-set promotion-counter (+ promo-id u1))
+    (ok promo-id)
+  )
+)
+
+(define-map merchant-ratings principal 
+  {
+    total-rating: uint,
+    rating-count: uint,
+    average-rating: uint
+  }
+)
+
+(define-constant ERR-INVALID-RATING (err u106))
+
+(define-public (rate-merchant (merchant principal) (rating uint))
+  (let (
+    (current-ratings (default-to {total-rating: u0, rating-count: u0, average-rating: u0} 
+                      (map-get? merchant-ratings merchant)))
+  )
+    (asserts! (and (>= rating u1) (<= rating u5)) ERR-INVALID-RATING)
+    (map-set merchant-ratings merchant
+      {
+        total-rating: (+ (get total-rating current-ratings) rating),
+        rating-count: (+ (get rating-count current-ratings) u1),
+        average-rating: (/ (+ (get total-rating current-ratings) rating) 
+                          (+ (get rating-count current-ratings) u1))
+      }
+    )
+    (ok true)
+  )
+)
+
+
+(define-map gift-points principal 
+  {
+    sender: principal,
+    amount: uint,
+    message: (string-ascii 100),
+    block-height: uint
+  }
+)
+
+(define-public (send-gift-points (recipient principal) (amount uint) (message (string-ascii 100)))
+  (let (
+    (sender-balance (default-to u0 (map-get? customer-points tx-sender)))
+  )
+    (asserts! (>= sender-balance amount) ERR-INSUFFICIENT-POINTS)
+    (map-set customer-points tx-sender (- sender-balance amount))
+    (map-set customer-points recipient 
+      (+ (default-to u0 (map-get? customer-points recipient)) amount)
+    )
+    (map-set gift-points recipient
+      {
+        sender: tx-sender,
+        amount: amount,
+        message: message,
+        block-height: stacks-block-height
+      }
+    )
+    (ok true)
+  )
+)
