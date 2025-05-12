@@ -334,3 +334,97 @@
     (ok true)
   )
 )
+
+
+(define-map staking-positions principal 
+  {
+    amount: uint,
+    start-block: uint,
+    lock-period: uint,
+    reward-rate: uint
+  }
+)
+
+(define-constant ERR-ALREADY-STAKING (err u107))
+(define-constant ERR-NO-STAKE-FOUND (err u108))
+(define-constant MIN-STAKE-PERIOD u100)
+(define-constant BASE-REWARD-RATE u5)
+
+(define-public (stake-points (amount uint) (lock-blocks uint))
+  (let (
+    (current-stake (map-get? staking-positions tx-sender))
+    (user-points (default-to u0 (map-get? customer-points tx-sender)))
+  )
+    (asserts! (is-none current-stake) ERR-ALREADY-STAKING)
+    (asserts! (>= user-points amount) ERR-INSUFFICIENT-POINTS)
+    (asserts! (>= lock-blocks MIN-STAKE-PERIOD) ERR-INVALID-AMOUNT)
+    
+    (map-set customer-points tx-sender (- user-points amount))
+    (map-set staking-positions tx-sender
+      {
+        amount: amount,
+        start-block: stacks-block-height,
+        lock-period: lock-blocks,
+        reward-rate: BASE-REWARD-RATE
+      }
+    )
+    (ok true)
+  )
+)
+
+(define-public (unstake-points)
+  (let (
+    (stake (unwrap! (map-get? staking-positions tx-sender) ERR-NO-STAKE-FOUND))
+    (current-points (default-to u0 (map-get? customer-points tx-sender)))
+    (blocks-staked (- stacks-block-height (get start-block stake)))
+    (reward-amount (/ (* (get amount stake) (get reward-rate stake) blocks-staked) u1000))
+  )
+    (asserts! (>= blocks-staked (get lock-period stake)) ERR-NOT-AUTHORIZED)
+    (map-delete staking-positions tx-sender)
+    (map-set customer-points tx-sender (+ current-points (get amount stake) reward-amount))
+    (ok reward-amount)
+  )
+)
+
+
+(define-map referrals principal 
+  {
+    referrer: (optional principal),
+    referral-count: uint,
+    total-bonus: uint
+  }
+)
+
+(define-constant REFERRAL-BONUS u1000)
+(define-constant ERR-ALREADY-REFERRED (err u109))
+(define-constant ERR-SELF-REFERRAL (err u110))
+
+(define-public (register-referral (referrer principal))
+  (let (
+    (existing-referral (map-get? referrals tx-sender))
+    (referrer-data (default-to {referrer: none, referral-count: u0, total-bonus: u0} 
+                    (map-get? referrals referrer)))
+  )
+    (asserts! (is-none existing-referral) ERR-ALREADY-REFERRED)
+    (asserts! (not (is-eq tx-sender referrer)) ERR-SELF-REFERRAL)
+    
+    (map-set referrals tx-sender 
+      {
+        referrer: (some referrer),
+        referral-count: u0,
+        total-bonus: u0
+      }
+    )
+    (map-set referrals referrer
+      {
+        referrer: (get referrer referrer-data),
+        referral-count: (+ (get referral-count referrer-data) u1),
+        total-bonus: (+ (get total-bonus referrer-data) REFERRAL-BONUS)
+      }
+    )
+    (map-set customer-points referrer 
+      (+ (default-to u0 (map-get? customer-points referrer)) REFERRAL-BONUS)
+    )
+    (ok true)
+  )
+)
